@@ -4,6 +4,8 @@ from .coder import GANOEncoder, GANOBackgroundEncoder, GANODecoder
 from .kernel import GANOKernel
 from typing import Optional, Literal, List
 
+# TODO: Allow more parameters for customization of the model.
+# This might be best achieved through a create_gano function.
 class GraphAttentionNeuralOperator(nn.Module):
     def __init__(
         self,

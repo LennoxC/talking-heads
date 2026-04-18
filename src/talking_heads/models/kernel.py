@@ -31,7 +31,6 @@ class GANOKernel(nn.Module):
     def forward(
         self,
         h_obs,        # (N_o, d_in)
-        x_obs,        # (N_o, d_in)
         pos_obs,      # (N_o, d_p)
         pos_query,    # (N_q, d_p)
         x_bg=None,    # (N_q, d_b)
@@ -47,6 +46,8 @@ class GANOKernel(nn.Module):
 
         pos_q_exp = pos_q.expand(-1, N_o, -1)
         pos_o_exp = pos_o.expand(N_q, -1, -1)
+
+        # TODO: allow different types of distance encoding specified by self.distance_encoding.
 
         # kernel can see position and distance.
         #
