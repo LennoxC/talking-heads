@@ -7,7 +7,7 @@ import os
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-N_MODES = 5
+N_MODES = 20
 N_GRID = 64
 N_OBS = 200
 

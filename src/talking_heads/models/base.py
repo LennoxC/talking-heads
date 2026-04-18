@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from .coder import GANOEncoder, GANOBackgroundEncoder, GANODecoder
 from .kernel import GANOKernel
+from .gnn import GNN
 from typing import Optional, Literal, List
 
 # TODO: Allow more parameters for customization of the model.
@@ -27,6 +28,19 @@ class GraphAttentionNeuralOperator(nn.Module):
         self.obs_encoder = GANOEncoder(
             in_dim_obs=in_dim_obs,
             latent_dim=latent_dim,
+            activation='ReLU'
+        )
+
+        # ---- Graph Neural Network ----
+        # Multi-layer message passing system. This gives an opportunity 
+        # to learn a more complex kernel. Local features can be aggregated 
+        # rather than relying on single node representations to learn the kernel.
+        # Form the GNN only knowing the latent dim of the node features.
+        # The GNN implements KNN/Radius graph construction internally.
+        self.gnn = GNN(
+            latent_dim=latent_dim,
+            k=4,
+            layers=2,
             activation='ReLU'
         )
 
@@ -76,12 +90,23 @@ class GraphAttentionNeuralOperator(nn.Module):
         # ---- Encode obs ----
         h_obs = self.obs_encoder(x_obs)  # (N_o, d)
 
+        # ---- GNN message passing ----
+        if self.use_bg:
+            h_bg = self.bg_encoder(x_bg) # (d,)
+        else:
+            h_bg = None
+        
+        h_obs = self.gnn(
+            h_obs=h_obs,
+            h_bg=h_bg,
+            pos_obs=pos_obs
+        ) # (N_o, d)
+
         h_query = self.kernel(
             h_obs=h_obs,
-            x_obs=x_obs,
             pos_obs=pos_obs,
             pos_query=pos_query,
-            x_bg=x_bg,
+            h_bg=h_bg,
             obs_mask=obs_mask
         ) # (N_q, d)
 

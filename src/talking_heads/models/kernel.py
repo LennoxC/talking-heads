@@ -20,6 +20,7 @@ class GANOKernel(nn.Module):
         self.distance_encoding = distance_encoding
         self.position_encodings = len(distance_encoding)
 
+        # TODO: multi-head attention
         self.kernel_mlp = nn.Sequential(
             nn.Linear(self.position_encodings * pos_dim, latent_dim),
             getattr(nn, activation)(),
@@ -30,10 +31,10 @@ class GANOKernel(nn.Module):
 
     def forward(
         self,
-        h_obs,        # (N_o, d_in)
+        h_obs,        # (N_o, d_h) # TODO check shapes
         pos_obs,      # (N_o, d_p)
         pos_query,    # (N_q, d_p)
-        x_bg=None,    # (N_q, d_b)
+        h_bg=None,    # (N_q, d_h)
         obs_mask=None # (N_o,)
     ):
         N_q = pos_query.shape[0] # query points
@@ -112,7 +113,6 @@ class GANOKernel(nn.Module):
 
         # ---- Background fusion ----
         if self.use_bg:
-            h_bg = self.bg_encoder(x_bg)
             h_query = torch.cat([h_query, h_bg], dim=-1)
 
         return h_query
