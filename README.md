@@ -20,9 +20,9 @@ To apply Graph Neural Networks to the data assimilation domain, we attempt to mo
 
 ## Future Updates (work in progress)
 
-- Implementation of Graph Convolutions
 - Options for handling temporal data in the GNN in two situations:
     - Each node has a single observation, but recorded at different times.
     - Each node recieves multiple observations over time.
+- Multi-head attention (currently single-head)
 - Attention across the graph structure, and other static gridded fields (e.g. topography)
 - Handling moving sensors
