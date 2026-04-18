@@ -11,8 +11,6 @@ N_MODES = 5
 N_GRID = 64
 N_OBS = 200
 
-print("Sample coverage: ", N_OBS / (N_GRID * N_GRID), "%")
-
 def generate_field(n_grid=N_GRID, n_modes=N_MODES):
     x = np.linspace(0, 1, n_grid)
     y = np.linspace(0, 1, n_grid)
@@ -169,8 +167,16 @@ def evaluate_and_plot(step=None):
     plt.close()
     """
 
-for step in range(10000):
-    loss = train_step()
-    if step % 500 == 0:
-        print(f"Step {step}, Loss: {loss:.4f}")
-        evaluate_and_plot(step=step)
+def run():
+    for step in range(10000):
+        loss = train_step()
+        if step % 500 == 0:
+            print(f"Step {step}, Loss: {loss:.4f}")
+            evaluate_and_plot(step=step)
+
+if __name__ == "__main__":
+    print("Sample coverage: ", N_OBS / (N_GRID * N_GRID), "%")
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"Total parameters: {total_params:,}")
+    run()
+    evaluate_and_plot()
