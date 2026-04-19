@@ -2,7 +2,7 @@ import talking_heads
 import torch
 import torch.nn as nn
 from .coder import GANOEncoder, GANOBackgroundEncoder, GANOMeanDecoder, GANOMeanVarDecoder
-from .kernel import GANOKernel
+from .kernel import BipartiteKernel
 from .gnn import GNN
 from typing import Optional, Literal, List
 
@@ -15,6 +15,8 @@ class GraphAttentionNeuralOperator(nn.Module):
         pos_dim,
         latent_dim,
         out_dim,
+        batch_size=1,
+        heads=8,
         bg_dim=None,
         radius=None,
         output_mode: Literal['MeanVar', 'Mean'] = 'MeanVar',
@@ -30,13 +32,14 @@ class GraphAttentionNeuralOperator(nn.Module):
         super().__init__()
 
         self.radius = radius
+        self.proj_dim = latent_dim * heads # latent_dim is the latent dim per head. The total dim therefore needs to be multiplied by the number of heads.
 
         # ---- Observation encoder ----
         # Projects observations into latent space.
         # allows choice of activation function.
         self.obs_encoder = GANOEncoder(
             in_dim_obs=in_dim_obs,
-            latent_dim=latent_dim,
+            latent_dim=self.proj_dim,
             activation=activations['encoder']
         )
 
@@ -48,7 +51,7 @@ class GraphAttentionNeuralOperator(nn.Module):
         # The GNN implements KNN/Radius graph construction internally.
         if use_gnn:
             self.gnn = GNN(
-                latent_dim=latent_dim,
+                latent_dim=self.proj_dim,
                 arch=gnn_arch,
                 k=gnn_k,
                 r=gnn_r,
@@ -63,34 +66,26 @@ class GraphAttentionNeuralOperator(nn.Module):
                     return h_obs
             self.gnn = IdentityGNN()
 
-        # ---- Background encoder ----
-        # Projects background information into latent space
-        # given less non-linearities and params which might not be desirable.
-        # The background information is probably equally important as the observations.
-        self.use_bg = bg_dim is not None
-        if self.use_bg:
-            self.bg_encoder = GANOBackgroundEncoder(
-                bg_dim=bg_dim,
-                latent_dim=latent_dim,
-                activation=activations['bg_encoder']
-            )
-
         # ---- Kernel & Attention ----
-        self.kernel = GANOKernel(
-            in_dim_obs=latent_dim,
+        self.kernel = BipartiteKernel(
+            in_dim_obs=in_dim_obs,
             pos_dim=pos_dim,
-            latent_dim=latent_dim,
-            out_dim=latent_dim,
-            bg_dim=bg_dim,
-            radius=radius,
+            latent_dim=self.proj_dim,
+            out_dim=out_dim,
+            radius=gnn_r, # TODO: add kernel radius
+            k=gnn_k, # TODO: add kernel k
+            heads=heads,
+            edge_mode='learned', # TODO: add learned distance mode
+            radii=None, # TODO: add multi-scale radii
+            activation=activations['kernel'],
             distance_encoding=distance_encoding
         )
-
+        
         # ---- Output: mean + var ----
         if output_mode not in ['MeanVar', 'Mean']: raise ValueError(f"Invalid output_mode: {output_mode}. Must be 'MeanVar' or 'Mean'.")
 
         self.decoder = getattr(talking_heads.models.coder, f"GANO{output_mode}Decoder")(
-            latent_dim=latent_dim,
+            latent_dim=self.proj_dim,
             out_dim=out_dim,
             bg_dim=bg_dim,
             activation=activations['decoder']
@@ -108,7 +103,9 @@ class GraphAttentionNeuralOperator(nn.Module):
         pos_obs,      # (N_o, d_p)
         pos_query,    # (N_q, d_p)
         x_bg=None,    # (N_q, d_b)
-        obs_mask=None # (N_o,)
+        obs_mask=None, # (N_o,)
+        obs_batch=None, # (N_o,)
+        query_batch=None # (N_q,)
     ):
         # ---- Encode obs ----
         h_obs = self.obs_encoder(x_obs)  # (N_o, d)
@@ -122,7 +119,8 @@ class GraphAttentionNeuralOperator(nn.Module):
         h_obs = self.gnn(
             h_obs=h_obs,
             h_bg=h_bg,
-            pos_obs=pos_obs
+            pos_obs=pos_obs,
+            batch=obs_batch
         ) # (N_o, d)
 
         h_query = self.kernel(
@@ -130,7 +128,9 @@ class GraphAttentionNeuralOperator(nn.Module):
             pos_obs=pos_obs,
             pos_query=pos_query,
             h_bg=h_bg,
-            obs_mask=obs_mask
+            obs_mask=obs_mask,
+            obs_batch=obs_batch,
+            query_batch=query_batch
         ) # (N_q, d)
 
         # ---- Decode & Return ----
