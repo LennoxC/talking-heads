@@ -34,6 +34,7 @@ pytorch_cluster = ">=1.6.3,<2"
 
 [tool.pixi.feature.test.dependencies]
 pytorch-cpu = ">=2.10.0,<3"
+pytest = ">=9.0.3,<10"
 
 [tool.pixi.feature.gpu.dependencies]
 cuda-version = "12.9.*"

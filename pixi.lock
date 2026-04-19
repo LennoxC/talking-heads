@@ -3262,7 +3262,7 @@ packages:
 - pypi: ./
   name: talking-heads
   version: 0.1.0
-  sha256: 308def5afec2a94576d5eb4da789e8e9a385b7c96aee4c438123d96369f1fa2c
+  sha256: a9ee37da53403bf947521ec7158ea2bbaf0a459c47753903fd572dbf6d46d34d
   requires_python: '>=3.11,<3.13'
 - conda: https://conda.anaconda.org/conda-forge/linux-64/tbb-2022.3.0-hb700be7_2.conda
   sha256: 975710e4b7f1b13c3c30b7fbf21e22f50abe0463b6b47a231582fdedcc45c961

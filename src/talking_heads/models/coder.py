@@ -56,7 +56,8 @@ class GANOMeanDecoder(nn.Module):
         self,
         latent_dim: int,
         out_dim: int,
-        bg_dim: typing.Optional[int] = None
+        bg_dim: typing.Optional[int] = None,
+        activation: str = 'ReLU'
     ):
         super().__init__()
 
@@ -64,7 +65,7 @@ class GANOMeanDecoder(nn.Module):
 
         self.decoder = nn.Sequential(
             nn.Linear(decoder_in, latent_dim),
-            nn.ReLU(),
+            getattr(nn, activation)(),
             nn.Linear(latent_dim, out_dim) # output mean only
         )
     
@@ -78,7 +79,8 @@ class GANOMeanVarDecoder(nn.Module):
         self,
         latent_dim: int,
         out_dim: int,
-        bg_dim: typing.Optional[int] = None
+        bg_dim: typing.Optional[int] = None,
+        activation: str = 'ReLU'
     ):
         super().__init__()
 
@@ -86,7 +88,7 @@ class GANOMeanVarDecoder(nn.Module):
 
         self.decoder = nn.Sequential(
             nn.Linear(decoder_in, latent_dim),
-            nn.ReLU(),
+            getattr(nn, activation)(),
             nn.Linear(latent_dim, 2 * out_dim) # output mean and logvar
         )
     

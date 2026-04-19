@@ -57,7 +57,11 @@ class GraphAttentionNeuralOperator(nn.Module):
                 activation=activations['gnn']
             )
         else:
-            self.gnn = nn.Identity()
+            # If not using a GNN, use an identity function so that the rest of the model can remain unchanged.
+            class IdentityGNN(nn.Module):
+                def forward(self, h_obs, *args, **kwargs):
+                    return h_obs
+            self.gnn = IdentityGNN()
 
         # ---- Background encoder ----
         # Projects background information into latent space
@@ -88,7 +92,8 @@ class GraphAttentionNeuralOperator(nn.Module):
         self.decoder = getattr(talking_heads.models.coder, f"GANO{output_mode}Decoder")(
             latent_dim=latent_dim,
             out_dim=out_dim,
-            bg_dim=bg_dim
+            bg_dim=bg_dim,
+            activation=activations['decoder']
         )
 
     # N_o = number of observations (i.e. number of graph nodes)
