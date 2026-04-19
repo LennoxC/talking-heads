@@ -1,6 +1,7 @@
+import talking_heads
 import torch
 import torch.nn as nn
-from .coder import GANOEncoder, GANOBackgroundEncoder, GANODecoder
+from .coder import GANOEncoder, GANOBackgroundEncoder, GANOMeanDecoder, GANOMeanVarDecoder
 from .kernel import GANOKernel
 from .gnn import GNN
 from typing import Optional, Literal, List
@@ -16,7 +17,15 @@ class GraphAttentionNeuralOperator(nn.Module):
         out_dim,
         bg_dim=None,
         radius=None,
-        distance_encoding: List[Literal['q_pos', 'o_pos', 'rel', 'rbf', 'fourier']] = ['q_pos', 'o_pos', 'rel']
+        output_mode: Literal['MeanVar', 'Mean'] = 'MeanVar',
+        distance_encoding: List[Literal['q_pos', 'o_pos', 'rel', 'rbf', 'fourier']] = ['q_pos', 'o_pos', 'rel'],
+        use_gnn: bool = True,
+        gnn_arch: Literal['r', 'k'] = 'k',
+        gnn_layers: int = 2,
+        gnn_k: int = 4,
+        gnn_r: float = 1.0,
+        gnn_self_loops: bool = True,
+        activations: dict = {'encoder': 'ReLU', 'bg_encoder': 'ReLU', 'gnn': 'ReLU', 'kernel': 'ReLU', 'decoder': 'ReLU'}
     ):
         super().__init__()
 
@@ -28,7 +37,7 @@ class GraphAttentionNeuralOperator(nn.Module):
         self.obs_encoder = GANOEncoder(
             in_dim_obs=in_dim_obs,
             latent_dim=latent_dim,
-            activation='ReLU'
+            activation=activations['encoder']
         )
 
         # ---- Graph Neural Network ----
@@ -37,12 +46,18 @@ class GraphAttentionNeuralOperator(nn.Module):
         # rather than relying on single node representations to learn the kernel.
         # Form the GNN only knowing the latent dim of the node features.
         # The GNN implements KNN/Radius graph construction internally.
-        self.gnn = GNN(
-            latent_dim=latent_dim,
-            k=4,
-            layers=2,
-            activation='ReLU'
-        )
+        if use_gnn:
+            self.gnn = GNN(
+                latent_dim=latent_dim,
+                arch=gnn_arch,
+                k=gnn_k,
+                r=gnn_r,
+                layers=gnn_layers,
+                self_loops=gnn_self_loops,
+                activation=activations['gnn']
+            )
+        else:
+            self.gnn = nn.Identity()
 
         # ---- Background encoder ----
         # Projects background information into latent space
@@ -52,7 +67,8 @@ class GraphAttentionNeuralOperator(nn.Module):
         if self.use_bg:
             self.bg_encoder = GANOBackgroundEncoder(
                 bg_dim=bg_dim,
-                latent_dim=latent_dim
+                latent_dim=latent_dim,
+                activation=activations['bg_encoder']
             )
 
         # ---- Kernel & Attention ----
@@ -67,7 +83,9 @@ class GraphAttentionNeuralOperator(nn.Module):
         )
 
         # ---- Output: mean + var ----
-        self.decoder = GANODecoder(
+        if output_mode not in ['MeanVar', 'Mean']: raise ValueError(f"Invalid output_mode: {output_mode}. Must be 'MeanVar' or 'Mean'.")
+
+        self.decoder = getattr(talking_heads.models.coder, f"GANO{output_mode}Decoder")(
             latent_dim=latent_dim,
             out_dim=out_dim,
             bg_dim=bg_dim

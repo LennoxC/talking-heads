@@ -3,6 +3,7 @@ import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
 from talking_heads.models.base import GraphAttentionNeuralOperator
+from talking_heads.loss import GaussianNLLLoss, L2Loss
 import os
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -39,6 +40,36 @@ def generate_field(n_grid=N_GRID, n_modes=N_MODES):
 
     return coords, field
 
+def generate_field_with_bg(n_grid=N_GRID, n_modes=N_MODES):
+    x = np.linspace(0, 1, n_grid)
+    y = np.linspace(0, 1, n_grid)
+    X, Y = np.meshgrid(x, y)
+
+    psi = np.zeros_like(X)
+
+    # random Fourier-like smooth field
+    for _ in range(n_modes):
+        kx, ky = np.random.randint(1, 5, size=2)
+        phase = np.random.rand() * 2 * np.pi
+        amp = np.random.randn() * 0.5
+
+        psi += amp * np.sin(2 * np.pi * (kx * X + ky * Y) + phase)
+
+    # velocity from streamfunction
+    u = np.gradient(psi, axis=0)
+    v = -np.gradient(psi, axis=1)
+
+    # scalar field (correlated but not identical)
+    scalar = psi + 0.1 * np.random.randn(*psi.shape)
+
+    field = np.stack([u, v], axis=-1)  # (H, W, 2)
+    #bg = scalar.unsqueeze(-1) # (H, W, 1)
+    bg = np.expand_dims(scalar, axis=-1)
+
+    coords = np.stack([X, Y], axis=-1)  # (H, W, 2)
+
+    return coords, field, bg
+
 def sample_observations(coords, field, n_obs=N_OBS):
     H, W, _ = coords.shape
     coords_flat = coords.reshape(-1, 2)
@@ -50,6 +81,20 @@ def sample_observations(coords, field, n_obs=N_OBS):
     x_obs = field_flat[idx]
 
     return pos_obs, x_obs
+
+def sample_observations_with_bg(coords, field, bg, n_obs=N_OBS):
+    H, W, _ = coords.shape
+    coords_flat = coords.reshape(-1, 2)
+    field_flat = field.reshape(-1, 2)
+    bg_flat = bg.reshape(-1, 1)
+
+    idx = np.random.choice(len(coords_flat), n_obs, replace=False)
+
+    pos_obs = coords_flat[idx]
+    x_obs = field_flat[idx]
+    x_bg = bg_flat[idx]
+
+    return pos_obs, x_obs, x_bg
 
 def prepare_batch(n_grid=N_GRID, n_obs=N_OBS):
     coords, field = generate_field(n_grid)
@@ -66,13 +111,31 @@ def prepare_batch(n_grid=N_GRID, n_obs=N_OBS):
         torch.tensor(y_true, dtype=torch.float32),
     )
 
+def prepare_batch_with_bg(n_grid=N_GRID, n_obs=N_OBS):
+    coords, field, bg = generate_field_with_bg(n_grid)
+
+    pos_obs, x_obs, x_bg = sample_observations_with_bg(coords, field, bg, n_obs)
+
+    pos_query = coords.reshape(-1, 2)
+    y_true = field.reshape(-1, 2)
+    x_bg = bg.reshape(-1, 1)
+
+    return (
+        torch.tensor(x_obs, dtype=torch.float32),
+        torch.tensor(pos_obs, dtype=torch.float32),
+        torch.tensor(pos_query, dtype=torch.float32),
+        torch.tensor(y_true, dtype=torch.float32),
+        torch.tensor(x_bg, dtype=torch.float32)
+    )
+
 model = GraphAttentionNeuralOperator(
-    in_dim_obs=3,
-    pos_dim=2,
-    latent_dim=64,
-    out_dim=3,
-    bg_dim=None,
-    radius=0.3
+    in_dim_obs=2, # u and v in
+    pos_dim=2, # x and y coordinates
+    latent_dim=64, # dimension of latent node features
+    out_dim=2, # u and v out
+    bg_dim=1, # scalar background field dimension
+    radius=0.3, # local attention radius (in normalized coordinates)
+    output_mode='MeanVar', # output both mean and variance for uncertainty estimation
 ).to(device)
 
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
@@ -80,21 +143,24 @@ optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 def train_step():
     model.train()
 
-    x_obs, pos_obs, pos_query, y_true = prepare_batch()
+    x_obs, pos_obs, pos_query, y_true, x_bg = prepare_batch_with_bg()
 
     x_obs = x_obs.to(device)
     pos_obs = pos_obs.to(device)
     pos_query = pos_query.to(device)
     y_true = y_true.to(device)
+    x_bg = x_bg.to(device)
 
     pred_mean, pred_logvar = model(
         x_obs=x_obs,
         pos_obs=pos_obs,
-        pos_query=pos_query
+        pos_query=pos_query,
+        x_bg=x_bg
     )
 
     # Gaussian NLL loss
-    loss = ((pred_mean - y_true) ** 2 * torch.exp(-pred_logvar) + pred_logvar).mean()
+    loss = GaussianNLLLoss()(pred_mean, pred_logvar, y_true)
+    # loss = ((pred_mean - y_true) ** 2 * torch.exp(-pred_logvar) + pred_logvar).mean()
 
     optimizer.zero_grad()
     loss.backward()
@@ -105,13 +171,14 @@ def train_step():
 def evaluate_and_plot(step=None):
     model.eval()
 
-    x_obs, pos_obs, pos_query, y_true = prepare_batch(n_grid=N_GRID, n_obs=N_OBS)
+    x_obs, pos_obs, pos_query, y_true, x_bg = prepare_batch_with_bg(n_grid=N_GRID, n_obs=N_OBS)
 
     with torch.no_grad():
         pred_mean, pred_var = model(
             x_obs=x_obs.to(device),
             pos_obs=pos_obs.to(device),
-            pos_query=pos_query.to(device)
+            pos_query=pos_query.to(device),
+            x_bg=x_bg.to(device)
         )
 
     pred = pred_mean.cpu().numpy()
@@ -120,15 +187,15 @@ def evaluate_and_plot(step=None):
 
     n = int(np.sqrt(len(pred)))
 
-    pred = pred.reshape(n, n, 3)
-    truth = truth.reshape(n, n, 3)
-    var = var.reshape(n, n, 3)
+    pred = pred.reshape(n, n, 2)
+    truth = truth.reshape(n, n, 2)
+    var = var.reshape(n, n, 2)
 
-    fig, axs = plt.subplots(3, 3, figsize=(12, 6))
+    fig, axs = plt.subplots(3, 2, figsize=(12, 6))
 
-    titles = ["u", "v", "scalar"]
+    titles = ["u", "v"]
 
-    for i in range(3):
+    for i in range(2):
         axs[0, i].imshow(truth[:, :, i])
         axs[0, i].set_title(f"True {titles[i]}")
 

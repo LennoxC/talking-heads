@@ -1,19 +1,29 @@
 import torch
 import torch.nn as nn
 from torch_geometric.nn import SAGEConv
-from torch_geometric.nn import knn_graph
+from torch_geometric.nn import knn_graph, radius_graph
+from typing import Literal, List
 
 class GNN(nn.Module):
     def __init__(
             self,
             latent_dim: int,
+            arch: Literal['r', 'k'] = 'k',
             k: int = 4,
+            r: float = 1.0,
             layers: int = 2,
+            self_loops: bool = True,
             activation: str = 'ReLU',
         ):
         super().__init__()
 
         self.k = k
+        self.r = r
+        self.arch = arch
+        if arch == 'k':
+            self.graph_constructor = lambda pos: knn_graph(pos, k=self.k, batch=None, loop=self_loops)
+        elif arch == 'r':
+            self.graph_constructor = lambda pos: radius_graph(pos, r=self.r, batch=None, loop=self_loops)
         self.convs = nn.ModuleList([
             SAGEConv(latent_dim, latent_dim) for _ in range(layers)
         ])
@@ -28,7 +38,7 @@ class GNN(nn.Module):
         # Construct graph using KNN
     
         # x = [N_o, d_h]
-        edge_index = knn_graph(pos_obs, k=self.k, batch=None, loop=True) # (2, E)
+        edge_index = self.graph_constructor(pos_obs) # (2, E)
         
         # Message passing
         h = h_obs

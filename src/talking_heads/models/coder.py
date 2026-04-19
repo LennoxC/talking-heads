@@ -31,11 +31,16 @@ class GANOBackgroundEncoder(nn.Module):
     def __init__(
         self,
         bg_dim: int,
-        latent_dim: int
+        latent_dim: int,
+        activation: str = 'ReLU',
     ):
         super().__init__()
 
-        self.bg_encoder = nn.Linear(bg_dim, latent_dim)
+        self.bg_encoder = nn.Sequential(
+            nn.Linear(bg_dim, latent_dim),
+            getattr(nn, activation)(),
+            nn.Linear(latent_dim, latent_dim)
+        )
     
     def forward(
         self,
@@ -46,7 +51,7 @@ class GANOBackgroundEncoder(nn.Module):
 
         return z_bg
     
-class GANODecoder(nn.Module):
+class GANOMeanDecoder(nn.Module):
     def __init__(
         self,
         latent_dim: int,
@@ -60,7 +65,29 @@ class GANODecoder(nn.Module):
         self.decoder = nn.Sequential(
             nn.Linear(decoder_in, latent_dim),
             nn.ReLU(),
-            nn.Linear(latent_dim, 2 * out_dim)
+            nn.Linear(latent_dim, out_dim) # output mean only
+        )
+    
+    def forward(self, x):
+        x = self.decoder(x)
+        
+        return x
+
+class GANOMeanVarDecoder(nn.Module):
+    def __init__(
+        self,
+        latent_dim: int,
+        out_dim: int,
+        bg_dim: typing.Optional[int] = None
+    ):
+        super().__init__()
+
+        decoder_in = latent_dim * 2 if bg_dim is not None else latent_dim
+
+        self.decoder = nn.Sequential(
+            nn.Linear(decoder_in, latent_dim),
+            nn.ReLU(),
+            nn.Linear(latent_dim, 2 * out_dim) # output mean and logvar
         )
     
     def forward(self, x):

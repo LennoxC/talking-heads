@@ -23,6 +23,15 @@ To apply Graph Neural Networks to the data assimilation domain, we attempt to mo
 - Options for handling temporal data in the GNN in two situations:
     - Each node has a single observation, but recorded at different times.
     - Each node recieves multiple observations over time.
-- Multi-head attention (currently single-head)
-- Attention across the graph structure, and other static gridded fields (e.g. topography)
-- Handling moving sensors
+- Multi-head attention (currently single-head).
+- Unet or patchwise attention to incorporate other gridded fields. E.g. a topography map.
+- Handling moving sensors.
+- Batching. Might require the same number of obs per batch?
+- Predict only mean if specified.
+- Setup testing for different architectures.
+- Shift from pred + background to multi-input graphs.
+    - Add optional links between graphs for message passing. Essentially just combine the two graphs through concatenation and then build the connections.
+    - Node type encoding might be desireable.
+    - All node types will need the same latent space dimension.
+- Ability to inject a custom PyTorch Geometric layer.
+- Add helpers for freezing layers while training.
