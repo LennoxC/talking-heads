@@ -92,7 +92,8 @@ class GraphAttentionNeuralOperator(nn.Module):
         self.decoder = getattr(talking_heads.models.coder, f"GANO{output_mode}Decoder")(
             latent_dim=latent_dim,
             out_dim=out_dim,
-            bg_dim=bg_dim
+            bg_dim=bg_dim,
+            activation=activations['decoder']
         )
 
     # N_o = number of observations (i.e. number of graph nodes)

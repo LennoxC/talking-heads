@@ -36,6 +36,21 @@ MODEL_CONFIGS = [
             architecture="meanvar",
         ),
     },
+    {
+        "name": "meanvar-gnn-activations",
+        "kwargs": dict(
+            data_in_dim=4,
+            positional_dim=2,
+            data_out_dim=3,
+            architecture="meanvar-kgnn",
+            activations={
+                'encoder': 'GELU',
+                'bg_encoder': 'LeakyReLU',
+                'gnn': 'Sigmoid',
+                'kernel': 'Tanh',
+                'decoder': 'SiLU'
+            })
+    }
 ]
 
 @pytest.fixture(params=MODEL_CONFIGS, ids=lambda x: x["name"])
