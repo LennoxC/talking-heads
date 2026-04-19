@@ -21,12 +21,12 @@ To apply Graph Neural Networks to the data assimilation domain, we attempt to mo
 ## Future Updates (work in progress)
 
 Priority:
-- Multi-head attention (currently single-head).
-- Batching. Might require the same number of obs per batch? Unless masked attention can fix it.
 - Shift from pred + background to multi-input graphs.
     - Add optional links between graphs for message passing. Essentially just combine the two graphs through concatenation and then build the connections.
     - Node type encoding might be desireable.
     - All node types will need the same latent space dimension.
+- Multi-head attention (currently single-head).
+- Batching. Might require the same number of obs per batch? Unless masked attention can fix it.
 
 Lower Priority:
 - Options for handling temporal data in the GNN in two situations:
