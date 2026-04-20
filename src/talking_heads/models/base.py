@@ -72,11 +72,11 @@ class GraphAttentionNeuralOperator(nn.Module):
             pos_dim=pos_dim,
             latent_dim=self.proj_dim,
             out_dim=out_dim,
-            radius=gnn_r, # TODO: add kernel radius
-            k=gnn_k, # TODO: add kernel k
+            radius=1.0, # TODO: add kernel radius
+            k=100, # TODO: add kernel k
             heads=heads,
-            edge_mode='learned', # TODO: add learned distance mode
-            radii=None, # TODO: add multi-scale radii
+            edge_mode='knn',
+            radii=[0.1, 1.0, 2.0], # TODO: add multi-scale radii
             activation=activations['kernel'],
             distance_encoding=distance_encoding
         )
@@ -102,7 +102,6 @@ class GraphAttentionNeuralOperator(nn.Module):
         x_obs,        # (N_o, d_in)
         pos_obs,      # (N_o, d_p)
         pos_query,    # (N_q, d_p)
-        x_bg=None,    # (N_q, d_b)
         obs_mask=None, # (N_o,)
         obs_batch=None, # (N_o,)
         query_batch=None # (N_q,)
@@ -111,10 +110,7 @@ class GraphAttentionNeuralOperator(nn.Module):
         h_obs = self.obs_encoder(x_obs)  # (N_o, d)
 
         # ---- GNN message passing ----
-        if self.use_bg:
-            h_bg = self.bg_encoder(x_bg) # (d,)
-        else:
-            h_bg = None
+        h_bg = None # bg is being phased out
         
         h_obs = self.gnn(
             h_obs=h_obs,
@@ -127,7 +123,6 @@ class GraphAttentionNeuralOperator(nn.Module):
             h_obs=h_obs,
             pos_obs=pos_obs,
             pos_query=pos_query,
-            h_bg=h_bg,
             obs_mask=obs_mask,
             obs_batch=obs_batch,
             query_batch=query_batch

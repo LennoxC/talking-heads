@@ -32,9 +32,9 @@ def generate_field(n_grid=N_GRID, n_modes=N_MODES):
     v = -np.gradient(psi, axis=1)
 
     # scalar field (correlated but not identical)
-    scalar = psi + 0.1 * np.random.randn(*psi.shape)
+    # scalar = psi + 0.1 * np.random.randn(*psi.shape)
 
-    field = np.stack([u, v, scalar], axis=-1)  # (H, W, 3)
+    field = np.stack([u, v], axis=-1)  # (H, W, 2)
 
     coords = np.stack([X, Y], axis=-1)  # (H, W, 2)
 
@@ -60,20 +60,20 @@ def generate_field_with_bg(n_grid=N_GRID, n_modes=N_MODES):
     v = -np.gradient(psi, axis=1)
 
     # scalar field (correlated but not identical)
-    scalar = psi + 0.1 * np.random.randn(*psi.shape)
+    #scalar = psi + 0.1 * np.random.randn(*psi.shape)
 
     field = np.stack([u, v], axis=-1)  # (H, W, 2)
     #bg = scalar.unsqueeze(-1) # (H, W, 1)
-    bg = np.expand_dims(scalar, axis=-1)
+    #bg = np.expand_dims(scalar, axis=-1)
 
     coords = np.stack([X, Y], axis=-1)  # (H, W, 2)
 
-    return coords, field, bg
+    return coords, field#, bg
 
 def sample_observations(coords, field, n_obs=N_OBS):
     H, W, _ = coords.shape
     coords_flat = coords.reshape(-1, 2)
-    field_flat = field.reshape(-1, 3)
+    field_flat = field.reshape(-1, 2)
 
     idx = np.random.choice(len(coords_flat), n_obs, replace=False)
 
@@ -102,7 +102,7 @@ def prepare_batch(n_grid=N_GRID, n_obs=N_OBS):
     pos_obs, x_obs = sample_observations(coords, field, n_obs)
 
     pos_query = coords.reshape(-1, 2)
-    y_true = field.reshape(-1, 3)
+    y_true = field.reshape(-1, 2)
 
     return (
         torch.tensor(x_obs, dtype=torch.float32),
@@ -128,14 +128,25 @@ def prepare_batch_with_bg(n_grid=N_GRID, n_obs=N_OBS):
         torch.tensor(x_bg, dtype=torch.float32)
     )
 
+'''
 model = GraphAttentionNeuralOperator(
     in_dim_obs=2, # u and v in
     pos_dim=2, # x and y coordinates
     latent_dim=64, # dimension of latent node features
     out_dim=2, # u and v out
-    bg_dim=1, # scalar background field dimension
+    bg_dim=None, # scalar background field dimension
     radius=0.3, # local attention radius (in normalized coordinates)
     output_mode='MeanVar', # output both mean and variance for uncertainty estimation
+).to(device)
+'''
+
+from talking_heads.architectures.gano import create_gano
+
+model = create_gano(
+    data_in_dim=2,
+    positional_dim=2,
+    data_out_dim=2,
+    latent_dim=16
 ).to(device)
 
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
@@ -143,19 +154,17 @@ optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 def train_step():
     model.train()
 
-    x_obs, pos_obs, pos_query, y_true, x_bg = prepare_batch_with_bg()
+    x_obs, pos_obs, pos_query, y_true = prepare_batch()
 
-    x_obs = x_obs.to(device)
+    x_obs = x_obs.to(device)  # Use only the first two dimensions
     pos_obs = pos_obs.to(device)
     pos_query = pos_query.to(device)
     y_true = y_true.to(device)
-    x_bg = x_bg.to(device)
 
     pred_mean, pred_logvar = model(
         x_obs=x_obs,
         pos_obs=pos_obs,
-        pos_query=pos_query,
-        x_bg=x_bg
+        pos_query=pos_query
     )
 
     # Gaussian NLL loss
@@ -171,14 +180,13 @@ def train_step():
 def evaluate_and_plot(step=None):
     model.eval()
 
-    x_obs, pos_obs, pos_query, y_true, x_bg = prepare_batch_with_bg(n_grid=N_GRID, n_obs=N_OBS)
+    x_obs, pos_obs, pos_query, y_true = prepare_batch(n_grid=N_GRID, n_obs=N_OBS)
 
     with torch.no_grad():
         pred_mean, pred_var = model(
             x_obs=x_obs.to(device),
             pos_obs=pos_obs.to(device),
-            pos_query=pos_query.to(device),
-            x_bg=x_bg.to(device)
+            pos_query=pos_query.to(device)
         )
 
     pred = pred_mean.cpu().numpy()
