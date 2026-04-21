@@ -3,6 +3,7 @@ import torch.nn as nn
 from torch_geometric.nn import radius, knn
 from torch_geometric.utils import softmax
 
+
 class BipartiteKernel(nn.Module):
     def __init__(
         self,
@@ -15,10 +16,11 @@ class BipartiteKernel(nn.Module):
         k=None,
         heads=4,
         head_dim=None,
-        edge_mode: str = "multi_scale",  # "radius", "knn", "multi_scale"
-        radii=None,  # list for multi-scale. E.g. for normalized coordinate space from -1 to 1, could be [0.1, 0.2, 0.4] (local, mid-range, global)
+        chunking_factor=1,
+        edge_mode: str = "multi_scale",
+        radii=None,
         activation='ReLU',
-        distance_encoding=['rel', 'q_pos', 'o_pos', 'rbf'] # which distance features to use for attention. Can be any combination of: relative position (rel), query position (q_pos), observation position (o_pos), RBF of distance (rbf), Fourier features (fourier)
+        distance_encoding=['rel', 'q_pos', 'o_pos', 'rbf']
     ):
         super().__init__()
 
@@ -28,6 +30,7 @@ class BipartiteKernel(nn.Module):
         self.k = k
         self.radii = radii
         self.heads = heads
+        self.chunking_factor = max(1, int(chunking_factor))
 
         self.head_dim = head_dim if head_dim is not None else latent_dim // heads
         self.total_dim = self.heads * self.head_dim
@@ -35,38 +38,37 @@ class BipartiteKernel(nn.Module):
         self.distance_encoding = distance_encoding
         self.pos_dim = pos_dim
 
-        # params for kernelized attention
-        self.log_sigma = nn.Parameter(torch.tensor(-2.0))  # exp(-2) ≈ 0.135
-        self.temperature = 1.5  # soften softmax
+        # kernel params
+        self.log_sigma = nn.Parameter(torch.tensor(-2.0))
+        self.temperature = 1.5
 
-        # ---- Value projection ----
+        # projections
         self.value_proj = nn.Linear(latent_dim, self.total_dim)
 
-        # ---- Attention MLP (per-edge) ----
         edge_input_dim = len(distance_encoding) * pos_dim
 
         self.kernel_mlp = nn.Sequential(
             nn.Linear(edge_input_dim, latent_dim),
             getattr(nn, activation)(),
-            nn.Linear(latent_dim, heads)  # one logit per head
+            nn.Linear(latent_dim, heads)
         )
 
     # --------------------------------------------------
-    # Edge construction
+    # Sparse edge construction (unchanged)
     # --------------------------------------------------
     def build_edges(self, pos_obs, pos_query, obs_batch, query_batch):
         if self.edge_mode == "radius":
-            edge_index = radius(
+            return radius(
                 x=pos_obs,
                 y=pos_query,
                 r=self.radius,
                 batch_x=obs_batch,
                 batch_y=query_batch,
-                max_num_neighbors=64  # safety cap
+                max_num_neighbors=64
             )
 
         elif self.edge_mode == "knn":
-            edge_index = knn(
+            return knn(
                 x=pos_obs,
                 y=pos_query,
                 k=self.k,
@@ -76,9 +78,7 @@ class BipartiteKernel(nn.Module):
 
         elif self.edge_mode == "multi_scale":
             if self.radii is None:
-                raise ValueError("radii must be provided for multi_scale mode")
-            if not isinstance(self.radii, (list, tuple)) or len(self.radii) == 0:
-                raise ValueError("radii must be a non-empty list of floats")
+                raise ValueError("radii must be provided")
 
             edge_list = []
             for r in self.radii:
@@ -91,79 +91,87 @@ class BipartiteKernel(nn.Module):
                     max_num_neighbors=64
                 )
                 edge_list.append(e)
-            edge_index = torch.cat(edge_list, dim=1)
-        
+
+            return torch.cat(edge_list, dim=1)
+
         else:
-            raise ValueError(f"Unknown edge_mode: {self.edge_mode}")
-
-        return edge_index  # (2, E)
+            raise ValueError(f"Edge mode {self.edge_mode} not supported here")
 
     # --------------------------------------------------
-    # Distance encoding
+    # Dense (matrix-based) kernel
     # --------------------------------------------------
-    def compute_edge_features(self, pos_obs, pos_query, edge_index):
-        dst, src = edge_index  # obs -> query
+    def forward_full(self, h_obs, pos_obs, pos_query):
+        """
+        Exact dense attention computed in query chunks.
+        This preserves the full-mode result while reducing peak memory.
+        """
+        N_o = pos_obs.size(0)
+        N_q = pos_query.size(0)
 
-        pos_o = pos_obs[src]     # (E, d_p)
-        pos_q = pos_query[dst]   # (E, d_p)
+        def compute_chunk(chunk_pos_query):
+            chunk_size = chunk_pos_query.size(0)
 
-        rel = pos_q - pos_o
+            pos_o = pos_obs.unsqueeze(0)  # (1, N_o, d_p)
+            pos_q = chunk_pos_query.unsqueeze(1)  # (chunk, 1, d_p)
+            rel = pos_q - pos_o  # (chunk, N_o, d_p)
 
-        feats = []
-        if 'rel' in self.distance_encoding:
-            feats.append(rel)
-        if 'q_pos' in self.distance_encoding:
-            feats.append(pos_q)
-        if 'o_pos' in self.distance_encoding:
-            feats.append(pos_o)
-        if "rbf" in self.distance_encoding:
-            # Example simple RBF encoding
+            feats = []
+            if 'rel' in self.distance_encoding:
+                feats.append(rel)
+            if 'q_pos' in self.distance_encoding:
+                feats.append(pos_q.expand(-1, N_o, -1))
+            if 'o_pos' in self.distance_encoding:
+                feats.append(pos_o.expand(chunk_size, -1, -1))
+            if "rbf" in self.distance_encoding:
+                dist2 = (rel ** 2).sum(dim=-1, keepdim=True)
+                feats.append(torch.exp(-dist2))
+
+            edge_attr = torch.cat(feats, dim=-1)
+            logits = self.kernel_mlp(edge_attr)
+
             dist2 = (rel ** 2).sum(dim=-1, keepdim=True)
-            feats.append(torch.exp(-dist2))
+            sigma = torch.exp(self.log_sigma) + 1e-6
+            kernel_log_weight = -dist2 / (2 * sigma**2)
+            logits = (logits + kernel_log_weight.expand(-1, -1, self.heads)) / self.temperature
 
-        if "fourier" in self.distance_encoding:
-            # Example Fourier features
-            freqs = self.fourier_freqs  # (F,)
-            # (N_query, N_obs, p, F)
-            angles = rel.unsqueeze(-1) * freqs
-            feats.append(torch.sin(angles).flatten(-2))
-            feats.append(torch.cos(angles).flatten(-2))
+            attn = torch.softmax(logits, dim=1)
+            v = self.value_proj(h_obs).view(N_o, self.heads, self.head_dim)
 
-        edge_attr = torch.cat(feats, dim=-1)  # (E, d_edge)
+            return torch.einsum("qoh,ohd->qhd", attn, v)
 
-        return edge_attr, rel
+        if N_q == 0:
+            return torch.zeros((0, self.heads * self.head_dim), device=h_obs.device, dtype=h_obs.dtype)
+
+        chunk_size = max(1, (N_q + self.chunking_factor - 1) // self.chunking_factor)
+        out = torch.zeros((N_q, self.heads, self.head_dim), device=h_obs.device, dtype=h_obs.dtype)
+
+        for start in range(0, N_q, chunk_size):
+            end = min(start + chunk_size, N_q)
+            out[start:end] = compute_chunk(pos_query[start:end])
+
+        return out.reshape(N_q, self.heads * self.head_dim)
 
     # --------------------------------------------------
-    # Forward
+    # Sparse forward (unchanged logic)
     # --------------------------------------------------
-    def forward(
+    def forward_sparse(
         self,
-        h_obs,        # (N_o, d)
-        pos_obs,      # (N_o, d_p)
-        pos_query,    # (N_q, d_p)
-        obs_mask=None,
-        obs_batch=None,
-        query_batch=None
+        h_obs,
+        pos_obs,
+        pos_query,
+        obs_batch,
+        query_batch,
+        obs_mask
     ):
         N_o = pos_obs.size(0)
         N_q = pos_query.size(0)
 
-        # ---- Default batching ----
-        if obs_batch is None:
-            obs_batch = pos_obs.new_zeros(N_o, dtype=torch.long)
-        if query_batch is None:
-            query_batch = pos_query.new_zeros(N_q, dtype=torch.long)
+        edge_index = self.build_edges(
+            pos_obs, pos_query, obs_batch, query_batch
+        )
 
-        # ---- Build bipartite edges ----
-        edge_index = self.build_edges(pos_obs, pos_query, obs_batch, query_batch)
+        dst, src = edge_index
 
-        dst, src = edge_index  # obs -> query
-
-        device = h_obs.device
-        src = src.contiguous().to(device)
-        dst = dst.contiguous().to(device)
-
-        # ---- Mask invalid observations ----
         if obs_mask is not None:
             valid = obs_mask[src] > 0
             src = src[valid]
@@ -176,43 +184,76 @@ class BipartiteKernel(nn.Module):
                 dtype=h_obs.dtype
             )
 
-        # ---- Compute edge features ----
-        edge_attr, rel = self.compute_edge_features(pos_obs, pos_query, (dst, src))
+        pos_o = pos_obs[src]
+        pos_q = pos_query[dst]
+        rel = pos_q - pos_o
 
-        # ---- Attention logits ----
-        logits = self.kernel_mlp(edge_attr).contiguous()  # (E, heads)
+        feats = []
+        if 'rel' in self.distance_encoding:
+            feats.append(rel)
+        if 'q_pos' in self.distance_encoding:
+            feats.append(pos_q)
+        if 'o_pos' in self.distance_encoding:
+            feats.append(pos_o)
+        if "rbf" in self.distance_encoding:
+            dist2 = (rel ** 2).sum(dim=-1, keepdim=True)
+            feats.append(torch.exp(-dist2))
 
-        # ---- Distance kernel (smoothness) ----
-        dist2 = (rel ** 2).sum(dim=-1, keepdim=True)  # (E, 1)
+        edge_attr = torch.cat(feats, dim=-1)
 
+        logits = self.kernel_mlp(edge_attr)
+
+        dist2 = (rel ** 2).sum(dim=-1, keepdim=True)
         sigma = torch.exp(self.log_sigma) + 1e-6
-        kernel_log_weight = -dist2 / (2 * sigma**2)  # log Gaussian kernel
+        kernel_log_weight = -dist2 / (2 * sigma**2)
 
-        # Broadcast to heads
-        kernel_log_weight = kernel_log_weight.expand(-1, self.heads)
+        logits = logits + kernel_log_weight.expand(-1, self.heads)
 
-        logits = logits + kernel_log_weight
+        v = self.value_proj(h_obs).view(N_o, self.heads, self.head_dim)
+        v_src = v[src]
 
-        if torch.isnan(logits).any():
-            raise ValueError("NaNs in logits")
+        attn = softmax(logits, dst, num_nodes=N_q).unsqueeze(-1)
 
-        # ---- Multi-head value projection ----
-        v = self.value_proj(h_obs).view(N_o, self.heads, self.head_dim).contiguous()  # (N_o, heads * head_dim)
-        v_src = v[src]  # (E, heads, head_dim)
+        out = attn * v_src
 
-        # ---- Normalize attention per query node ----
-        # scatter over dst (queries)
-        attn = softmax(logits, dst, num_nodes=N_q)  # (E, heads)
+        h_query = torch.zeros(
+            (N_q, self.heads, self.head_dim),
+            device=h_obs.device,
+            dtype=h_obs.dtype
+        )
 
-        attn = attn.unsqueeze(-1)  # (E, heads, 1)
-
-        # ---- Weighted aggregation ----
-        out = attn * v_src  # (E, heads, head_dim)
-
-        h_query = out.new_zeros((N_q, self.heads, self.head_dim))
         h_query.index_add_(0, dst, out)
 
-        # ---- Merge heads ----
-        h_query = h_query.view(N_q, self.heads * self.head_dim)
+        return h_query.view(N_q, self.heads * self.head_dim)
 
-        return h_query
+    # --------------------------------------------------
+    # Forward
+    # --------------------------------------------------
+    def forward(
+        self,
+        h_obs,
+        pos_obs,
+        pos_query,
+        obs_mask=None,
+        obs_batch=None,
+        query_batch=None
+    ):
+        N_o = pos_obs.size(0)
+        N_q = pos_query.size(0)
+
+        if obs_batch is None:
+            obs_batch = pos_obs.new_zeros(N_o, dtype=torch.long)
+        if query_batch is None:
+            query_batch = pos_query.new_zeros(N_q, dtype=torch.long)
+
+        if self.edge_mode == "full":
+            return self.forward_full(h_obs, pos_obs, pos_query)
+        else:
+            return self.forward_sparse(
+                h_obs,
+                pos_obs,
+                pos_query,
+                obs_batch,
+                query_batch,
+                obs_mask
+            )

@@ -9,8 +9,8 @@ import os
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 N_MODES = 20
-N_GRID = 64
-N_OBS = 200
+N_GRID = 256
+N_OBS = 1024
 
 def generate_field(n_grid=N_GRID, n_modes=N_MODES):
     x = np.linspace(0, 1, n_grid)
@@ -146,8 +146,30 @@ model = create_gano(
     data_in_dim=2,
     positional_dim=2,
     data_out_dim=2,
-    latent_dim=16
+    latent_dim=32
 ).to(device)
+
+model = GraphAttentionNeuralOperator(
+    2,
+    2,
+    128,
+    2,
+    batch_size=1,
+    heads=1,
+    bg_dim=None,
+    radius=None,
+    output_mode = 'MeanVar',
+    distance_encoding = ['q_pos', 'o_pos', 'rel'],
+    use_gnn = True,
+    gnn_arch = 'k',
+    gnn_layers = 20,
+    gnn_k = 16,
+    gnn_r = 1.0,
+    gnn_self_loops = True,
+    activations = {'encoder': 'ReLU', 'bg_encoder': 'ReLU', 'gnn': 'ReLU', 'kernel': 'ReLU', 'decoder': 'ReLU'}
+).to(device)
+
+print(model)
 
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 

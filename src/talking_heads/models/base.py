@@ -1,3 +1,4 @@
+from .ganokernel import GANOPlusKernel
 import talking_heads
 import torch
 import torch.nn as nn
@@ -16,15 +17,15 @@ class GraphAttentionNeuralOperator(nn.Module):
         latent_dim,
         out_dim,
         batch_size=1,
-        heads=8,
+        heads=1,
         bg_dim=None,
         radius=None,
         output_mode: Literal['MeanVar', 'Mean'] = 'MeanVar',
         distance_encoding: List[Literal['q_pos', 'o_pos', 'rel', 'rbf', 'fourier']] = ['q_pos', 'o_pos', 'rel'],
         use_gnn: bool = True,
         gnn_arch: Literal['r', 'k'] = 'k',
-        gnn_layers: int = 2,
-        gnn_k: int = 4,
+        gnn_layers: int = 16,
+        gnn_k: int = 16,
         gnn_r: float = 1.0,
         gnn_self_loops: bool = True,
         activations: dict = {'encoder': 'ReLU', 'bg_encoder': 'ReLU', 'gnn': 'ReLU', 'kernel': 'ReLU', 'decoder': 'ReLU'}
@@ -67,20 +68,35 @@ class GraphAttentionNeuralOperator(nn.Module):
             self.gnn = IdentityGNN()
 
         # ---- Kernel & Attention ----
+        
         self.kernel = BipartiteKernel(
             in_dim_obs=in_dim_obs,
             pos_dim=pos_dim,
             latent_dim=self.proj_dim,
             out_dim=out_dim,
             radius=1.0, # TODO: add kernel radius
-            k=100, # TODO: add kernel k
+            k=48, # TODO: add kernel k
             heads=heads,
+            chunking_factor=1, # reduce chunk size by this factor to save memory (e.g. 2 means predict on half the grid at a time)
             edge_mode='knn',
             radii=[0.1, 1.0, 2.0], # TODO: add multi-scale radii
             activation=activations['kernel'],
             distance_encoding=distance_encoding
         )
-        
+        """
+        self.kernel = GANOPlusKernel(
+            in_dim_obs=in_dim_obs,
+            pos_dim=pos_dim,
+            latent_dim=self.proj_dim,
+            out_dim=out_dim,
+            heads=heads,
+            radius=radius,
+            activation=activations['kernel'],
+            distance_encoding=distance_encoding,
+            q_chunk_size=32768 // batch_size, # adjust chunk size based on batch size to keep memory usage roughly constant
+            o_chunk_size=512 // batch_size
+        )
+        """
         # ---- Output: mean + var ----
         if output_mode not in ['MeanVar', 'Mean']: raise ValueError(f"Invalid output_mode: {output_mode}. Must be 'MeanVar' or 'Mean'.")
 
