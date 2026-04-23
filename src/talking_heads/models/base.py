@@ -2,7 +2,10 @@ import talking_heads
 import torch
 import torch.nn as nn
 from .coder import GANOEncoder, GANOBackgroundEncoder, GANOMeanDecoder, GANOMeanVarDecoder
-from .kernel import BipartiteKernel
+#from .kernel import BipartiteKernel
+from .gano_kernel import GANOKernel
+from .onet_kernel import DeepONetKernel
+from .neural_gp_kernel import NeuralGPKernel
 from .gnn import GNN
 from typing import Optional, Literal, List
 
@@ -16,7 +19,7 @@ class GraphAttentionNeuralOperator(nn.Module):
         latent_dim,
         out_dim,
         batch_size=1,
-        heads=8,
+        heads=16,
         bg_dim=None,
         radius=None,
         output_mode: Literal['MeanVar', 'Mean'] = 'MeanVar',
@@ -27,12 +30,15 @@ class GraphAttentionNeuralOperator(nn.Module):
         gnn_k: int = 4,
         gnn_r: float = 1.0,
         gnn_self_loops: bool = True,
+        kernel: Literal['gano', 'onet'] = 'gano',
         activations: dict = {'encoder': 'ReLU', 'bg_encoder': 'ReLU', 'gnn': 'ReLU', 'kernel': 'ReLU', 'decoder': 'ReLU'}
     ):
         super().__init__()
 
         self.radius = radius
         self.proj_dim = latent_dim * heads # latent_dim is the latent dim per head. The total dim therefore needs to be multiplied by the number of heads.
+
+        self.kernel_type = kernel
 
         # ---- Observation encoder ----
         # Projects observations into latent space.
@@ -67,20 +73,33 @@ class GraphAttentionNeuralOperator(nn.Module):
             self.gnn = IdentityGNN()
 
         # ---- Kernel & Attention ----
-        self.kernel = BipartiteKernel(
-            in_dim_obs=in_dim_obs,
-            pos_dim=pos_dim,
-            latent_dim=self.proj_dim,
-            out_dim=out_dim,
-            radius=1.0, # TODO: add kernel radius
-            k=100, # TODO: add kernel k
-            heads=heads,
-            edge_mode='knn',
-            radii=[0.1, 1.0, 2.0], # TODO: add multi-scale radii
-            activation=activations['kernel'],
-            distance_encoding=distance_encoding
-        )
-        
+        if kernel == 'gano':
+            self.kernel = GANOKernel(
+                in_dim_obs=in_dim_obs,
+                pos_dim=pos_dim,
+                latent_dim=self.proj_dim,
+                out_dim=out_dim,
+                heads=heads,
+                activation=activations['kernel']
+            )
+        elif kernel == 'onet':
+            self.kernel = DeepONetKernel(
+                in_dim_obs=in_dim_obs,
+                pos_dim=pos_dim,
+                latent_dim=self.proj_dim,
+                out_dim=out_dim,
+                bg_dim=bg_dim,
+                heads=heads,
+                head_dim=None,
+                activation=activations['kernel']
+            )
+        elif kernel == 'neural_gp':
+            self.kernel = NeuralGPKernel(
+                in_dim_obs=in_dim_obs,
+                pos_dim=pos_dim,
+                latent_dim=self.proj_dim,
+                out_dim=out_dim)
+
         # ---- Output: mean + var ----
         if output_mode not in ['MeanVar', 'Mean']: raise ValueError(f"Invalid output_mode: {output_mode}. Must be 'MeanVar' or 'Mean'.")
 
@@ -119,14 +138,22 @@ class GraphAttentionNeuralOperator(nn.Module):
             batch=obs_batch
         ) # (N_o, d)
 
+        # if batch dim is none, reshape to add a single batch dim
+        if obs_batch is None:
+            h_obs = h_obs.unsqueeze(0)
+            pos_obs = pos_obs.unsqueeze(0)
+            pos_query = pos_query.unsqueeze(0)
+
         h_query = self.kernel(
             h_obs=h_obs,
             pos_obs=pos_obs,
             pos_query=pos_query,
-            obs_mask=obs_mask,
-            obs_batch=obs_batch,
-            query_batch=query_batch
         ) # (N_q, d)
+
+        if self.kernel_type == 'neural_gp':
+            # NeuralGP returns mean and var separately. These don't need a decoder
+            h_query, h_var = h_query
+            return h_query, h_var
 
         # ---- Decode & Return ----
         return self.decoder(h_query) # (N_q, 2*out_dim) -> mean + logvar

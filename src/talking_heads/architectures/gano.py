@@ -18,6 +18,7 @@ def create_gano(
         gnn_layers: int = 2,
         gnn_k: int = 4,
         gnn_r: float = 1.0,
+        kernel: Literal['gano', 'onet'] = 'gano',
         gnn_self_loops: bool = True,
         activations: dict = None # activations dictionary with keys 'encoder', 'gnn', 'kernel', 'decoder' and values as activation function names (e.g. 'ReLU', 'Tanh'). These are parsed directly as pytorch modules, so ensure the function names match a pytorch activation function (case sensitive). If a key is missing, it will default to 'ReLU' for that component.
     ):
@@ -89,7 +90,8 @@ def create_gano(
             gnn_k=gnn_k,
             gnn_r=gnn_r,
             gnn_self_loops=gnn_self_loops,
-            activations=activations
+            activations=activations,
+            kernel=kernel
         )
 
         return model

@@ -193,7 +193,8 @@ def evaluate_and_plot(step=None):
     var = (torch.exp(pred_var)).cpu().numpy() # convert logvar to var
     truth = y_true.numpy()
 
-    n = int(np.sqrt(len(pred)))
+    #n = int(np.sqrt(len(pred)))
+    n = N_GRID
 
     pred = pred.reshape(n, n, 2)
     truth = truth.reshape(n, n, 2)
