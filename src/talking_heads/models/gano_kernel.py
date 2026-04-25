@@ -8,23 +8,20 @@ class GANOKernel(nn.Module):
         pos_dim,
         latent_dim,
         out_dim,
-        bg_dim=None,
         radius=None,
         heads=4,
-        head_dim=None,
         activation='ReLU',
         distance_encoding=['q_pos', 'o_pos', 'rel', 'dist']
     ):
         super().__init__()
 
         self.radius = radius
-        self.use_bg = bg_dim is not None
         self.distance_encoding = distance_encoding
         self.position_encodings = len(distance_encoding)
         self.kernel_in_dim = self.position_encodings * pos_dim if 'dist' not in distance_encoding else self.position_encodings * pos_dim - pos_dim + 1
 
         self.heads = heads
-        self.head_dim = head_dim or (latent_dim // heads)
+        self.head_dim = latent_dim // heads
         self.latent_dim = self.heads * self.head_dim
 
         # --- Kernel MLP (shared across heads) ---
@@ -34,7 +31,8 @@ class GANOKernel(nn.Module):
             nn.Linear(latent_dim, heads)  # one logit per head
         )
 
-        # --- Value projection (multi-head) ---
+        # --- Pre-LN + value projection (multi-head) ---
+        self.pre_ln = nn.LayerNorm(latent_dim)
         self.value_proj = nn.Linear(latent_dim, self.latent_dim)
 
         # --- Output projection ---
@@ -45,7 +43,6 @@ class GANOKernel(nn.Module):
         h_obs,        # (B, N_o, d_h)
         pos_obs,      # (B, N_o, d_p)
         pos_query,    # (B, N_q, d_p)
-        h_bg=None,    # (B, N_q, d_bg)
         obs_mask=None # (B, N_o)
     ):
         B, N_q, _ = pos_query.shape
@@ -62,9 +59,18 @@ class GANOKernel(nn.Module):
 
         dist = torch.norm(rel, dim=-1, keepdim=True)
 
-        kernel_input = torch.cat(
-            [pos_q_exp, pos_o_exp, rel, dist], dim=-1 # add dist?
-        )  # (B, N_q, N_o, pos_features)
+        # construct kernel input based on distance encoding choices
+        kernel_input_parts = []
+        if 'q_pos' in self.distance_encoding:
+            kernel_input_parts.append(pos_q_exp)
+        if 'o_pos' in self.distance_encoding:
+            kernel_input_parts.append(pos_o_exp)
+        if 'rel' in self.distance_encoding:
+            kernel_input_parts.append(rel)
+        if 'dist' in self.distance_encoding:
+            kernel_input_parts.append(dist)
+
+        kernel_input = torch.stack(kernel_input_parts, dim=-1).view(B, N_q, N_o, -1)  # (B, N_q, N_o, pos_features)
 
         # --- Attention logits (multi-head) ---
         logits = self.kernel_mlp(kernel_input)  # (B, N_q, N_o, H)
@@ -87,6 +93,9 @@ class GANOKernel(nn.Module):
 
         weights = torch.softmax(logits, dim=-1)  # (B, H, N_q, N_o)
 
+        # Layer Norm on h_obs before value projection
+        h_obs = self.pre_ln(h_obs)
+
         # --- Values ---
         v = self.value_proj(h_obs)  # (B, N_o, H*d_head)
         v = v.view(B, N_o, self.heads, self.head_dim)
@@ -96,13 +105,6 @@ class GANOKernel(nn.Module):
         h_query = torch.matmul(weights, v)  # (B, H, N_q, d_head)
         h_query = h_query.permute(0, 2, 1, 3).contiguous()
         h_query = h_query.view(B, N_q, self.latent_dim)  # (B, N_q, H*d_head)
-
-        # --- Background fusion ---
-        if self.use_bg:
-            h_query = torch.cat([h_query, h_bg], dim=-1)
-
-        # --- Final projection ---
-        #h_query = self.out_proj(h_query)
 
         return h_query
         
