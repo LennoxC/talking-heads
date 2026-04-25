@@ -4,7 +4,6 @@ import torch.nn as nn
 class GANOKernel(nn.Module):
     def __init__(
         self,
-        in_dim_obs,
         pos_dim,
         latent_dim,
         out_dim,
@@ -36,30 +35,40 @@ class GANOKernel(nn.Module):
         self.value_proj = nn.Linear(latent_dim, self.latent_dim)
 
         # --- Output projection ---
-        self.out_proj = nn.Linear(self.latent_dim + (bg_dim or 0), out_dim)
+        self.out_proj = nn.Linear(self.latent_dim, out_dim)
 
     def forward(
         self,
-        h_obs,        # (B, N_o, d_h)
-        pos_obs,      # (B, N_o, d_p)
-        pos_query,    # (B, N_q, d_p)
-        obs_mask=None # (B, N_o)
+        h_obs,        # (N_o, d_h)
+        pos_obs,      # (N_o, d_p)
+        pos_query,    # (N_q, d_p)
+        obs_mask=None, # (N_o,)
+        obs_batch=None, # (N_o,)
+        query_batch=None # (N_q,)
     ):
-        B, N_q, _ = pos_query.shape
-        _, N_o, _ = pos_obs.shape
+        device = pos_obs.device
 
-        # --- Pairwise geometry ---
-        pos_q = pos_query.unsqueeze(2)   # (B, N_q, 1, d_p)
-        pos_o = pos_obs.unsqueeze(1)     # (B, 1, N_o, d_p)
+        # --- Handle missing batch ---
+        if obs_batch is None:
+            obs_batch = torch.zeros(pos_obs.shape[0], dtype=torch.long, device=device)
+        if query_batch is None:
+            query_batch = torch.zeros(pos_query.shape[0], dtype=torch.long, device=device)
 
-        rel = pos_q - pos_o              # (B, N_q, N_o, d_p)
+        N_q = pos_query.shape[0]
+        N_o = pos_obs.shape[0]
 
-        pos_q_exp = pos_q.expand(-1, -1, N_o, -1)
-        pos_o_exp = pos_o.expand(-1, N_q, -1, -1)
+        # --- Pairwise geometry (flattened) ---
+        pos_q = pos_query.unsqueeze(1)   # (N_q, 1, d_p)
+        pos_o = pos_obs.unsqueeze(0)     # (1, N_o, d_p)
 
-        dist = torch.norm(rel, dim=-1, keepdim=True)
+        rel = pos_q - pos_o              # (N_q, N_o, d_p)
+        dist = torch.norm(rel, dim=-1, keepdim=True)  # (N_q, N_o, 1)
 
-        # construct kernel input based on distance encoding choices
+        # expand
+        pos_q_exp = pos_q.expand(-1, N_o, -1)
+        pos_o_exp = pos_o.expand(N_q, -1, -1)
+
+        # --- Kernel input ---
         kernel_input_parts = []
         if 'q_pos' in self.distance_encoding:
             kernel_input_parts.append(pos_q_exp)
@@ -70,41 +79,42 @@ class GANOKernel(nn.Module):
         if 'dist' in self.distance_encoding:
             kernel_input_parts.append(dist)
 
-        kernel_input = torch.stack(kernel_input_parts, dim=-1).view(B, N_q, N_o, -1)  # (B, N_q, N_o, pos_features)
+        kernel_input = torch.cat(kernel_input_parts, dim=-1)  # (N_q, N_o, pos_features)
 
-        # --- Attention logits (multi-head) ---
-        logits = self.kernel_mlp(kernel_input)  # (B, N_q, N_o, H)
-        logits = logits.permute(0, 3, 1, 2)     # (B, H, N_q, N_o)
+        # --- Attention logits ---
+        logits = self.kernel_mlp(kernel_input)  # (N_q, N_o, H)
+        logits = logits.permute(2, 0, 1)        # (H, N_q, N_o)
 
-        # --- Distance masking ---
+        # --- Batch mask (CRITICAL) ---
+        batch_mask = (query_batch.unsqueeze(1) == obs_batch.unsqueeze(0))  # (N_q, N_o)
+
+        logits = logits.masked_fill(~batch_mask.unsqueeze(0), float('-inf'))
+
+        # --- Radius mask ---
         if self.radius is not None:
-            dist = torch.norm(rel, dim=-1)  # (B, N_q, N_o)
-            logits = logits.masked_fill(
-                dist.unsqueeze(1) > self.radius,
-                float('-inf')
-            )
+            d = dist.squeeze(-1)  # (N_q, N_o)
+            logits = logits.masked_fill(d.unsqueeze(0) > self.radius, float('-inf'))
 
-        # --- Observation mask ---
+        # --- Obs mask ---
         if obs_mask is not None:
             logits = logits.masked_fill(
-                obs_mask.unsqueeze(1).unsqueeze(2) == 0,
+                (~obs_mask).unsqueeze(0).unsqueeze(1),  # (1,1,N_o)
                 float('-inf')
             )
 
-        weights = torch.softmax(logits, dim=-1)  # (B, H, N_q, N_o)
-
-        # Layer Norm on h_obs before value projection
-        h_obs = self.pre_ln(h_obs)
+        # --- Softmax ---
+        weights = torch.softmax(logits, dim=-1)  # (H, N_q, N_o)
 
         # --- Values ---
-        v = self.value_proj(h_obs)  # (B, N_o, H*d_head)
-        v = v.view(B, N_o, self.heads, self.head_dim)
-        v = v.permute(0, 2, 1, 3)   # (B, H, N_o, d_head)
+        h_obs = self.pre_ln(h_obs)
+        v = self.value_proj(h_obs)  # (N_o, H*d_head)
+        v = v.view(N_o, self.heads, self.head_dim)
+        v = v.permute(1, 0, 2)  # (H, N_o, d_head)
 
         # --- Aggregation ---
-        h_query = torch.matmul(weights, v)  # (B, H, N_q, d_head)
-        h_query = h_query.permute(0, 2, 1, 3).contiguous()
-        h_query = h_query.view(B, N_q, self.latent_dim)  # (B, N_q, H*d_head)
+        h_query = torch.matmul(weights, v)  # (H, N_q, d_head)
+        h_query = h_query.permute(1, 0, 2).contiguous()  # (N_q, H, d_head)
+        h_query = h_query.view(N_q, self.latent_dim)     # (N_q, H*d_head)
 
         return h_query
         
