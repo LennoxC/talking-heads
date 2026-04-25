@@ -62,9 +62,8 @@ def test_gnn_forward(gnn_and_config, pos_dim):
     gnn, config = gnn_and_config
     kwargs = config["kwargs"]
     h_obs, pos_obs = sample_data(n_obs=50, latent_dim=kwargs["latent_dim"], pos_dim=pos_dim)
-    h_bg = torch.randn_like(h_obs)  # Background features (not used in current GNN implementation but included for compatibility)
     
-    output = gnn(h_obs, h_bg, pos_obs)
+    output = gnn(h_obs, pos_obs)
     
     assert output.shape == h_obs.shape, f"Expected output shape {h_obs.shape}, got {output.shape}"
 
@@ -73,8 +72,7 @@ def test_gnn_backward(gnn_and_config, pos_dim):
     gnn, config = gnn_and_config
     kwargs = config["kwargs"]
     h_obs, pos_obs = sample_data(n_obs=50, latent_dim=kwargs["latent_dim"], pos_dim=pos_dim)
-    h_bg = torch.randn_like(h_obs)
     
-    output = gnn(h_obs, h_bg, pos_obs)
+    output = gnn(h_obs, pos_obs)
     loss = output.sum() # Simple loss to test backward pass
     loss.backward()  # Check that backward pass works without error

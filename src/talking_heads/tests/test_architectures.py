@@ -126,7 +126,7 @@ def run_model(model, obs_pos, obs_data, query_pos, obs_mask, obs_batch, query_ba
         x_obs=obs_data,
         pos_obs=obs_pos,
         pos_query=query_pos,
-        obs_mask=obs_mask,
+        #obs_mask=obs_mask,
         obs_batch=obs_batch,
         query_batch=query_batch,
     )

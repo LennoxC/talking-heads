@@ -55,7 +55,6 @@ class GraphAttentionNeuralOperator(nn.Module):
 
         # ---- Kernel & Attention ----
         self.kernel = GANOKernel(
-            in_dim_obs=in_dim_obs,
             pos_dim=pos_dim,
             latent_dim=self.proj_dim,
             out_dim=out_dim,
@@ -85,7 +84,6 @@ class GraphAttentionNeuralOperator(nn.Module):
         x_obs,        # (N_o, d_in)
         pos_obs,      # (N_o, d_p)
         pos_query,    # (N_q, d_p)
-        obs_mask=None, # (N_o,)
         obs_batch=None, # (N_o,)
         query_batch=None # (N_q,)
     ):
@@ -93,11 +91,8 @@ class GraphAttentionNeuralOperator(nn.Module):
         h_obs = self.obs_encoder(x_obs)  # (N_o, d)
 
         # ---- GNN message passing ----
-        h_bg = None # bg is being phased out
-        
         h_obs = self.gnn(
             h_obs=h_obs,
-            h_bg=h_bg,
             pos_obs=pos_obs,
             batch=obs_batch
         ) # (N_o, d)
@@ -112,6 +107,8 @@ class GraphAttentionNeuralOperator(nn.Module):
             h_obs=h_obs,
             pos_obs=pos_obs,
             pos_query=pos_query,
+            obs_batch=obs_batch,
+            query_batch=query_batch
         ) # (N_q, d)
 
         # ---- Decode & Return ----

@@ -1,7 +1,6 @@
 from talking_heads.models.base import GraphAttentionNeuralOperator
 from typing import Literal, List
 
-
 # Utilities for creating GANO models with different configurations.
 # There is no reason you can't create a GANO from the base class, but these functions 
 # provide a convenient interface.
@@ -11,14 +10,12 @@ def create_gano(
         positional_dim: int,
         data_out_dim: int,
         latent_dim: int = 64,
-        background_data_in_dim: int = None,
         attn_radius: float = None,
         architecture: str = 'meanvar-kgnn',
         distance_encoding: List[Literal['q_pos', 'o_pos', 'rel', 'rbf', 'fourier']] = ['q_pos', 'o_pos', 'rel'],
         gnn_layers: int = 2,
         gnn_k: int = 4,
         gnn_r: float = 1.0,
-        kernel: Literal['gano', 'onet'] = 'gano',
         gnn_self_loops: bool = True,
         activations: dict = None # activations dictionary with keys 'encoder', 'gnn', 'kernel', 'decoder' and values as activation function names (e.g. 'ReLU', 'Tanh'). These are parsed directly as pytorch modules, so ensure the function names match a pytorch activation function (case sensitive). If a key is missing, it will default to 'ReLU' for that component.
     ):
@@ -31,7 +28,6 @@ def create_gano(
             positional_dim: Dimension of positional information (e.g. 2 for interpolation in 2D space. I see no reason this should be larger than 3).
             data_out_dim: Dimension of output data at each query point. ()
             latent_dim: Default: 64. Dimension of latent node features in the GNN. 
-            background_data_in_dim: Dimension of background information (if any). If None, background information is not used.
             attn_radius: Default: None. Attention radius for local attention. If None, global attention is used.
             architecture: Default: 'meanvar-kgnn'. A string specifying the model architecture. This is a string in the format: outputmode-?gnnarch. The order of the components in the string does not matter.
                 - outputmode: 'meanvar' or 'mean' (specifies whether the model outputs both mean and variance for uncertainty estimation, or just the mean)
@@ -80,18 +76,15 @@ def create_gano(
             pos_dim=positional_dim,
             latent_dim=latent_dim,
             out_dim=data_out_dim,
-            bg_dim=background_data_in_dim,
             radius=attn_radius,
             output_mode=output_mode,
             distance_encoding=distance_encoding,
-            use_gnn=use_gnn,
             gnn_arch=gnn_arch,
             gnn_layers=gnn_layers,
             gnn_k=gnn_k,
             gnn_r=gnn_r,
             gnn_self_loops=gnn_self_loops,
-            activations=activations,
-            kernel=kernel
+            activations=activations
         )
 
         return model
